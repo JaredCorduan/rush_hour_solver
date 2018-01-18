@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+
+"""Rush Hour Solver, by Jared Corduan"""
+
+from functools import reduce
+from itertools import chain
+from string import ascii_lowercase
+import argparse
+
+
+HORIZONTAL = 0
+VERTICAL = 1
+
+
+def upward(point):
+    """Move a point upward (decrease the y-value)."""
+    return (point[0], point[1]-1)
+
+
+def downward(point):
+    """Move a point downward (increase the y-value)."""
+    return (point[0], point[1]+1)
+
+
+def right(point):
+    """Move a point upward (decrease the x-value)."""
+    return (point[0]+1, point[1])
+
+
+def left(point):
+    """Move a point downward (increase the x-value)."""
+    return (point[0]-1, point[1])
+
+
+def make_pts(forward, length, xval, yval):
+    """Create a tuple of points using foldl."""
+    return tuple(reduce(
+        lambda points, _: points+[forward(points[-1])],
+        range(length-1),
+        [(xval, yval)]))
+
+
+def make_horiz_pts(length, xval, yval):
+    """Create a tuple continuous horizontal points."""
+    return make_pts(right, length, xval, yval)
+
+
+def make_hcar(name, xval, yval):
+    """Create the data for a horizontal car."""
+    return name, HORIZONTAL, make_horiz_pts(2, xval, yval)
+
+
+def make_hbus(name, xval, yval):
+    """Create the data for a horizontal bus."""
+    return name, HORIZONTAL, make_horiz_pts(3, xval, yval)
+
+
+def make_vert_pts(length, xval, yval):
+    """Create a tuple continuous vertical points."""
+    return make_pts(downward, length, xval, yval)
+
+
+def make_vcar(name, xval, yval):
+    """Create the data for a vertical car."""
+    return name, VERTICAL, make_vert_pts(2, xval, yval)
+
+
+def make_vbus(name, xval, yval):
+    """Create the data for a vertical bus."""
+    return name, VERTICAL, make_vert_pts(3, xval, yval)
+
+
+def is_vacant(point, occupied):
+    """Returns true if the given point is unoccupied and valid."""
+    return point not in occupied and 1 <= point[0] <= 6 and 1 <= point[1] <= 6
+
+
+def get_moves(auto, point, descr, next_pt, occupied):
+    """
+    Generator to yield all new positions a given auto in a given
+    direction can move to.
+
+    :param auto: the automobile data
+    :param point: the point of the auto in the direction of the movement
+    :param descr: a format string for a description of the move
+    :param next_pt: a function to return the next point
+    :param occupied: a list of all occupied points on the game board
+
+    :yields: new positions and descriptions for all valid moves
+    """
+    name, axis, points = auto
+    spaces = 1
+    point = next_pt(point)
+    while is_vacant(point, occupied):
+        points = tuple(map(next_pt, points))
+        yield descr.format(spaces), (name, axis, points)
+        spaces += 1
+        point = next_pt(point)
+
+
+def move_auto(old_pos, new_pos, board):
+    """Return a new game board with one automobile in a new position."""
+    new_board = set(board)
+    new_board.remove(old_pos)
+    new_board.add(new_pos)
+    return new_board
+
+
+def check_moves(auto, occupied, board):
+    """
+    Generator to yield all game boards for valid moves of a given auto
+    in a given direction.
+
+    :param auto: the automobile data
+    :param occupied: a list of all occupied points on the game board
+    :param board: the game board
+
+    :yields: game boards and descriptions for all valid moves
+    """
+    _, axis, points = auto
+    if axis == HORIZONTAL:
+        forward, f_descr = right, 'right {}'
+        backward, b_descr = left, 'left {}'
+    else:
+        forward, f_descr = downward, 'down {}'
+        backward, b_descr = upward, 'up {}'
+    forward_moves = get_moves(auto, points[-1], f_descr, forward, occupied)
+    backward_moves = get_moves(auto, points[0], b_descr, backward, occupied)
+    for move_descr, new_pos in chain(forward_moves, backward_moves):
+        yield move_descr, move_auto(auto, new_pos, board)
+
+
+def explore(board):
+    """
+    Generator to yield all game boards within one move of one auto.
+
+    :param auto: the automobile data
+    :param occupied: a list of all occupied points on the game board
+    :param board: the game board
+
+    :yields: game boards and descriptions for all valid moves
+    """
+    occupied = [point for _, _, auto in board for point in auto]
+    for auto in board:
+        for descr, new_board in check_moves(auto, occupied, board):
+            move_descr = '{} -> {}'.format(auto[0], descr)
+            yield move_descr, new_board
+
+
+def success(board, player_car):
+    """Returns true if the game board is solved."""
+    for auto in board:
+        name, _, points = auto
+        if name == player_car and (6, 3) in points:
+            return True
+    return False
+
+
+def make_solution(idx, history):
+    """Returns a list of the solution instructions."""
+    solution = []
+    while idx != 0:
+        prev = history[idx]
+        solution.append(prev['descr'])
+        idx = prev['parent']
+    return solution[::-1]
+
+
+def solve(start, player_car):
+    """Solves a Rush Hour puzzle."""
+    explored = [start]
+    explore_start = 0
+    current_idx = 0
+    history = {}
+    while True:
+        explore_end = len(explored)
+        start = explore_start
+        if explore_start == explore_end:
+            return []
+        explore_start = explore_end
+        for idx, leaf in enumerate(explored[start:explore_end]):
+            for descr, board in explore(leaf):
+                if board not in explored:
+                    explored.append(board)
+                    current_idx += 1
+                    history[current_idx] = {
+                        'parent': start+idx,
+                        'descr': descr
+                    }
+                    if success(board, player_car):
+                        return make_solution(current_idx, history)
+    return None
+
+
+def validate_board(start, player_car):
+    """Validates that a Rush Hour puzzle is valid."""
+    points = [point for _, _, auto in start for point in auto]
+    if len(points) != len(set(points)):
+        return 'Invalid game board, autos are overlapping'
+    for xval, yval in points:
+        if xval < 0 or xval > 6 or yval < 0 or yval > 6:
+            return 'Invalid game board, autos are off the game board'
+
+    names = [auto[0] for auto in start]
+    if len(names) != len(set(names)):
+        return 'auto names must be unique'
+
+    def _has_player_car(auto):
+        return auto[0] == player_car
+
+    player_car = [auto for auto in start if _has_player_car(auto)]
+    if not player_car:
+        return 'missing the player (red) car'
+    if not player_car[0][1] == HORIZONTAL:
+        return 'player car must be horizontal'
+    if not player_car[0][2][0][1] == 3:
+        return 'player car must be on row 3'
+
+
+def display_board(board, player_car):
+    """Pretty prints the game board."""
+    tiles = ['.'] * 6
+    for i in range(6):
+        tiles[i] = ['.'] * 6
+    for char_tile, (name, _, points) in zip(ascii_lowercase, board):
+        for point in points:
+            tile = 'R' if name == player_car else char_tile
+            tiles[point[1]-1][point[0]-1] = tile
+    print('\n'.join([''.join(row) for row in tiles]))
+
+
+def create_parser():
+    """Create the command line argument parser."""
+
+    auto_factories = {
+        'hcar': make_hcar,
+        'hbus': make_hbus,
+        'vcar': make_vcar,
+        'vbus': make_vbus,
+    }
+
+    def parse_auto_arg(arg):
+        """Parse and validate auto information from the command line."""
+        try:
+            name, model, xval, yval = arg.split(',')
+            xval, yval = int(xval), int(yval)
+            auto_maker = auto_factories[model.lower()]
+            return auto_maker(name, xval, yval)
+        except Exception:
+            msg = 'format is name,model,xval,yval but got {} (see readme)'
+            raise argparse.ArgumentTypeError(msg.format(arg))
+
+    parser = argparse.ArgumentParser()
+    auto_msg = 'auto description of the form name,model,x,y (see readme.md)'
+    parser.add_argument(
+        '-p', '--player-car', default='red',
+        help='name of the player car, default is red')
+    parser.add_argument(
+        '-d', '--display', action='store_true',
+        help='set this to display the puzzle instead of solving it')
+    parser.add_argument('autos', nargs='*', type=parse_auto_arg, help=auto_msg)
+    return parser
+
+
+def main():
+    """
+    Creates a game board from the command line arguments
+    and either solves the puzzle or displays it.
+    """
+    parser = create_parser()
+    args = parser.parse_args()
+    start = set([auto for auto in args.autos])
+
+    error = validate_board(start, args.player_car)
+    if error:
+        parser.error(error)
+
+    if args.display:
+        display_board(start, args.player_car)
+    else:
+        solution = solve(start, args.player_car)
+        if solution:
+            for step in solution:
+                print(step)
+        else:
+            print('No solution exists.')
+
+
+if __name__ == '__main__':
+    main()
